@@ -38,14 +38,11 @@ def get_all_activities(garmin_client: GarminClient, limit: int = 1000) -> list[d
 
 
 def format_activity_type(activity_type: str, activity_name: str = "") -> tuple[str, str]:
-    # First format the activity type as before
     formatted_type = activity_type.replace('_', ' ').title() if activity_type else "Unknown"
 
-    # Initialize subtype as the same as the main type
     activity_subtype = formatted_type
     activity_type = formatted_type
 
-    # Map of specific subtypes to their main types
     activity_mapping = {
         "Barre": "Strength",
         "Indoor Cardio": "Cardio",
@@ -56,21 +53,17 @@ def format_activity_type(activity_type: str, activity_name: str = "") -> tuple[s
         "Treadmill Running": "Running"
     }
 
-    # Special replacement for Rowing V2
     if formatted_type == "Rowing V2":
         activity_type = "Rowing"
 
-    # Special case for Yoga and Pilates
     elif formatted_type in ["Yoga", "Pilates"]:
         activity_type = "Yoga/Pilates"
         activity_subtype = formatted_type
 
-    # If the formatted type is in our mapping, update both main type and subtype
     if formatted_type in activity_mapping:
         activity_type = activity_mapping[formatted_type]
         activity_subtype = formatted_type
 
-    # Special cases for activity names
     if activity_name and "meditation" in activity_name.lower():
         return "Meditation", "Meditation"
     if activity_name and "barre" in activity_name.lower():
@@ -108,7 +101,7 @@ def format_training_effect(training_effect_label: str) -> str:
 
 def format_pace(average_speed: float) -> str:
     if average_speed > 0:
-        pace_min_km = 1000 / (average_speed * 60)  # Convert to min/km
+        pace_min_km = 1000 / (average_speed * 60)
         minutes = int(pace_min_km)
         seconds = int((pace_min_km - minutes) * 60)
         return f"{minutes}:{seconds:02d} min/km"
@@ -123,14 +116,8 @@ def activity_exists(
     activity_type: str,
     activity_name: str,
 ) -> dict | None:
-    # Check if an activity already exists in the Notion database and return it if found.
-
-    # Determine the correct activity type for the lookup
     lookup_type = "Stretching" if "stretch" in activity_name.lower() else activity_type
 
-    # Create a time window to search for the activity. Notion has been observed to truncate datetimes to the minutes in
-    # some instances, causing the lookup using exact datetime to fail.
-    # TODO: We should store the activity ID in the Notion page to avoid this complexity.
     lookup_min_date = activity_date - timedelta(minutes=5)
     lookup_max_date = activity_date + timedelta(minutes=5)
 
@@ -140,7 +127,6 @@ def activity_exists(
             "and": [
                 {"property": "Date", "date": {"on_or_after": lookup_min_date.isoformat()}},
                 {"property": "Date", "date": {"on_or_before": lookup_max_date.isoformat()}},
-                # Further refine the search by activity type and name
                 {"property": "Activity Type", "select": {"equals": lookup_type}},
                 {"property": "Activity Name", "title": {"equals": activity_name}}
             ]
@@ -159,7 +145,6 @@ def activity_needs_update(existing_activity: dict, new_activity: dict) -> bool:
         activity_name
     )
 
-    # Check if 'Subactivity Type' property exists
     has_subactivity = (
         'Subactivity Type' in existing_props and
         existing_props['Subactivity Type'] is not None and
@@ -175,6 +160,8 @@ def activity_needs_update(existing_activity: dict, new_activity: dict) -> bool:
     ) or
         existing_props['Avg Power']['number'] != round(new_activity.get('avgPower', 0), 1) or
         existing_props['Max Power']['number'] != round(new_activity.get('maxPower', 0), 1) or
+        existing_props['Avg HR']['number'] != round(new_activity.get('averageHR', 0)) or
+        existing_props['Max HR']['number'] != round(new_activity.get('maxHR', 0)) or
         existing_props['Training Effect']['select']['name'] != format_training_effect(
         new_activity.get('trainingEffectLabel', 'Unknown')
     ) or
@@ -190,12 +177,11 @@ def activity_needs_update(existing_activity: dict, new_activity: dict) -> bool:
         existing_props['Fav']['checkbox'] != new_activity.get('favorite', False) or
         existing_props['Activity Type']['select']['name'] != activity_type or
         (has_subactivity and existing_props['Subactivity Type']['select']['name'] != activity_subtype) or
-        (not has_subactivity)  # If the property doesn't exist, we need an update
+        (not has_subactivity)
     )
 
 
 def create_activity(notion_client: NotionClient, database_id: str, activity: dict) -> None:
-    # Create a new activity in the Notion database
     activity_date = activity.get('startTimeGMT')
     activity_name = format_entertainment(activity.get('activityName', 'Unnamed Activity'))
     activity_type, activity_subtype = format_activity_type(
@@ -203,7 +189,6 @@ def create_activity(notion_client: NotionClient, database_id: str, activity: dic
         activity_name
     )
 
-    # Get icon for the activity type
     icon_url = ACTIVITY_ICONS.get(activity_subtype if activity_subtype != activity_type else activity_type)
 
     properties = {
@@ -217,6 +202,8 @@ def create_activity(notion_client: NotionClient, database_id: str, activity: dic
         "Avg Pace": {"rich_text": [{"text": {"content": format_pace(activity.get('averageSpeed', 0))}}]},
         "Avg Power": {"number": round(activity.get('avgPower', 0), 1)},
         "Max Power": {"number": round(activity.get('maxPower', 0), 1)},
+        "Avg HR": {"number": round(activity.get('averageHR', 0))},
+        "Max HR": {"number": round(activity.get('maxHR', 0))},
         "Training Effect": {"select": {"name": format_training_effect(activity.get('trainingEffectLabel', 'Unknown'))}},
         "Aerobic": {"number": round(activity.get('aerobicTrainingEffect', 0), 1)},
         "Aerobic Effect": {
@@ -242,14 +229,12 @@ def create_activity(notion_client: NotionClient, database_id: str, activity: dic
 
 
 def update_activity(notion_client: NotionClient, existing_activity: dict, new_activity: dict) -> None:
-    # Update an existing activity in the Notion database with new data
     activity_name = new_activity.get('activityName', 'Unnamed Activity')
     activity_type, activity_subtype = format_activity_type(
         new_activity.get('activityType', {}).get('typeKey', 'Unknown'),
         activity_name
     )
 
-    # Get icon for the activity type
     icon_url = ACTIVITY_ICONS.get(activity_subtype if activity_subtype != activity_type else activity_type)
 
     properties = {
@@ -261,6 +246,8 @@ def update_activity(notion_client: NotionClient, existing_activity: dict, new_ac
         "Avg Pace": {"rich_text": [{"text": {"content": format_pace(new_activity.get('averageSpeed', 0))}}]},
         "Avg Power": {"number": round(new_activity.get('avgPower', 0), 1)},
         "Max Power": {"number": round(new_activity.get('maxPower', 0), 1)},
+        "Avg HR": {"number": round(new_activity.get('averageHR', 0))},
+        "Max HR": {"number": round(new_activity.get('maxHR', 0))},
         "Training Effect": {
             "select": {"name": format_training_effect(new_activity.get('trainingEffectLabel', 'Unknown'))}
         },
@@ -290,22 +277,19 @@ def update_activity(notion_client: NotionClient, existing_activity: dict, new_ac
 def main():
     load_dotenv()
 
-    # Initialize Garmin and Notion clients using environment variables
     garmin_client, garmin_configuration = get_garmin_client()
     notion_client, notion_dbs = get_notion_client()
 
     database_id = notion_dbs.activities
 
-    # Get all activities
     activities = get_all_activities(garmin_client, garmin_configuration.activity_fetch_limit)
 
-    # Process all activities
     for activity in activities:
         activity_date_raw: str = activity.get('startTimeGMT')
         activity_date: datetime = (
             datetime
-            .strptime(activity_date_raw, '%Y-%m-%d %H:%M:%S')  # Parse as format received from Garmin
-            .replace(tzinfo=UTC)  # Set timezone to UTC, as Garmin times are in GMT/UTC. Close enough.
+            .strptime(activity_date_raw, '%Y-%m-%d %H:%M:%S')
+            .replace(tzinfo=UTC)
         )
 
         activity_name = format_entertainment(activity.get('activityName', 'Unnamed Activity'))
@@ -314,16 +298,13 @@ def main():
             activity_name
         )
 
-        # Check if activity already exists in Notion
         existing_activity = activity_exists(notion_client, database_id, activity_date, activity_type, activity_name)
 
         if existing_activity:
             if activity_needs_update(existing_activity, activity):
                 update_activity(notion_client, existing_activity, activity)
-                # print(f"Updated: {activity_type} - {activity_name}")
         else:
             create_activity(notion_client, database_id, activity)
-            # print(f"Created: {activity_type} - {activity_name}")
 
 
 if __name__ == '__main__':
