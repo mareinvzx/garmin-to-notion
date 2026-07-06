@@ -1,20 +1,29 @@
 from datetime import date, timedelta
-
 from dotenv import load_dotenv
-
 from src.helpers import get_garmin_client, get_notion_client
 
 
 def get_all_daily_steps(garmin):
     """
-    Get last x days of daily step count data from Garmin Connect.
+    Get last x days of daily step count data from Garmin Connect,
+    enriched with total/active calorie burn from the daily summary.
     """
     startdate = date.today() - timedelta(days=1)
     daterange = [startdate + timedelta(days=x)
                  for x in range((date.today() - startdate).days)]  # excl. today
     daily_steps = []
     for d in daterange:
-        daily_steps += garmin.get_daily_steps(d.isoformat(), d.isoformat())
+        steps_for_day = garmin.get_daily_steps(d.isoformat(), d.isoformat())
+        summary = garmin.get_user_summary(d.isoformat())
+
+        total_kcal = summary.get('totalKilocalories') if summary else None
+        active_kcal = summary.get('activeKilocalories') if summary else None
+
+        for entry in steps_for_day:
+            entry['totalKilocalories'] = total_kcal
+            entry['activeKilocalories'] = active_kcal
+
+        daily_steps += steps_for_day
     return daily_steps
 
 
@@ -41,11 +50,12 @@ def steps_need_update(existing_steps, new_steps):
     """
     existing_props = existing_steps['properties']
     activity_type = "Walking"
-
     return (
         existing_props['Total Steps']['number'] != new_steps.get('totalSteps') or
         existing_props['Step Goal']['number'] != new_steps.get('stepGoal') or
         existing_props['Total Distance (km)']['number'] != new_steps.get('totalDistance') or
+        existing_props['Totaal Verbrand (kcal)']['number'] != new_steps.get('totalKilocalories') or
+        existing_props['Actief Verbrand (kcal)']['number'] != new_steps.get('activeKilocalories') or
         existing_props['Activity Type']['title'] != activity_type
     )
 
@@ -61,14 +71,14 @@ def update_daily_steps(client, existing_steps, new_steps):
         "Activity Type": {"title": [{"text": {"content": "Walking"}}]},
         "Total Steps": {"number": new_steps.get('totalSteps')},
         "Step Goal": {"number": new_steps.get('stepGoal')},
-        "Total Distance (km)": {"number": round(total_distance / 1000, 2)}
+        "Total Distance (km)": {"number": round(total_distance / 1000, 2)},
+        "Totaal Verbrand (kcal)": {"number": new_steps.get('totalKilocalories')},
+        "Actief Verbrand (kcal)": {"number": new_steps.get('activeKilocalories')}
     }
-
     update = {
         "page_id": existing_steps['id'],
         "properties": properties,
     }
-
     client.pages.update(**update)
 
 
@@ -84,26 +94,23 @@ def create_daily_steps(client, database_id, steps):
         "Date": {"date": {"start": steps.get('calendarDate')}},
         "Total Steps": {"number": steps.get('totalSteps')},
         "Step Goal": {"number": steps.get('stepGoal')},
-        "Total Distance (km)": {"number": round(total_distance / 1000, 2)}
+        "Total Distance (km)": {"number": round(total_distance / 1000, 2)},
+        "Totaal Verbrand (kcal)": {"number": steps.get('totalKilocalories')},
+        "Actief Verbrand (kcal)": {"number": steps.get('activeKilocalories')}
     }
-
     page = {
         "parent": {"database_id": database_id},
         "properties": properties,
     }
-
     client.pages.create(**page)
 
 
 def main():
     load_dotenv()
-
     # Initialize Garmin and Notion clients using environment variables
     garmin_client, _ = get_garmin_client()
     notion_client, notion_dbs = get_notion_client()
-
     database_id = notion_dbs.daily_steps
-
     daily_steps = get_all_daily_steps(garmin_client)
     for steps in daily_steps:
         steps_date = steps.get('calendarDate')
